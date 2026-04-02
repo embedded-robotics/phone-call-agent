@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Phone Call Agent</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0f0f0f;
+      color: #e0e0e0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      gap: 32px;
+    }
+
+    h1 { font-size: 1.4rem; font-weight: 500; color: #aaa; letter-spacing: 0.05em; }
+
+    #btn {
+      width: 120px;
+      height: 120px;
+      border-radius: 50%;
+      border: 3px solid #333;
+      background: #1a1a1a;
+      color: #e0e0e0;
+      font-size: 0.85rem;
+      letter-spacing: 0.05em;
+      cursor: pointer;
+      transition: all 0.2s;
+      outline: none;
+    }
+    #btn:hover { border-color: #555; background: #222; }
+    #btn.active {
+      border-color: #4caf50;
+      background: #1b2e1b;
+      box-shadow: 0 0 24px rgba(76,175,80,0.3);
+    }
+    #btn.speaking {
+      border-color: #2196f3;
+      background: #0d1f2d;
+      box-shadow: 0 0 24px rgba(33,150,243,0.3);
+    }
+    #btn.connecting {
+      border-color: #ff9800;
+      background: #2a1e0d;
+    }
+
+    #status {
+      font-size: 0.85rem;
+      color: #666;
+      height: 1.2em;
+      transition: color 0.2s;
+    }
+
+    #transcript {
+      width: min(520px, 90vw);
+      max-height: 280px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .msg {
+      padding: 10px 14px;
+      border-radius: 12px;
+      font-size: 0.9rem;
+      line-height: 1.5;
+      max-width: 85%;
+    }
+    .msg.user {
+      background: #1e2a1e;
+      border: 1px solid #2a3d2a;
+      align-self: flex-end;
+      color: #90c990;
+    }
+    .msg.agent {
+      background: #1a1f2e;
+      border: 1px solid #252d42;
+      align-self: flex-start;
+      color: #90afd4;
+    }
+    .msg .label {
+      font-size: 0.7rem;
+      opacity: 0.5;
+      margin-bottom: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+  </style>
+</head>
+<body>
+
+<h1>Phone Call Agent</h1>
+
+<button id="btn">START</button>
+
+<div id="status">Click to begin</div>
+
+<div id="transcript"></div>
+
+<script>
+// ─── State ────────────────────────────────────────────────────────────────────
+let ws = null;
+let audioCtx = null;
+let mediaStream = null;
+let scriptProcessor = null;
+let agentSpeaking = false;
+let playbackQueue = Promise.resolve(); // serialise audio blobs
+
+const btn = document.getElementById("btn");
+const statusEl = document.getElementById("status");
+const transcriptEl = document.getElementById("transcript");
+
+// ─── μ-law decode table (ITU-T G.711) ────────────────────────────────────────
+const ULAW_TABLE = (() => {
+  const t = new Int16Array(256);
+  for (let i = 0; i < 256; i++) {
+    let u = ~i & 0xff;
+    const sign = u & 0x80;
+    const exp  = (u >> 4) & 0x07;
+    const mant = u & 0x0f;
+    let val = ((mant << 1) + 33) << (exp + 2);
+    t[i] = sign ? 132 - val : val - 132;
+  }
+  return t;
+})();
+
+function mulawToFloat32(mulaw) {
+  const out = new Float32Array(mulaw.length);
+  for (let i = 0; i < mulaw.length; i++) {
+    out[i] = ULAW_TABLE[mulaw[i]] / 32768.0;
+  }
+  return out;
+}
+
+// ─── UI helpers ───────────────────────────────────────────────────────────────
+function setStatus(text, cls = "") {
+  statusEl.textContent = text;
+  btn.className = cls;
+}
+
+function addMessage(role, text) {
+  const div = document.createElement("div");
+  div.className = `msg ${role}`;
+  div.innerHTML = `<div class="label">${role === "user" ? "You" : "Agent"}</div>${text}`;
+  transcriptEl.appendChild(div);
+  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+}
+
+// ─── Audio playback ───────────────────────────────────────────────────────────
+function schedulePlayback(mulaw) {
+  // Enqueue blobs so they play in order without overlap
+  playbackQueue = playbackQueue.then(() => playBlob(mulaw));
+}
+
+function playBlob(mulaw) {
+  return new Promise(resolve => {
+    if (!audioCtx) { resolve(); return; }
+
+    const samples = mulawToFloat32(mulaw);
+    const buffer  = audioCtx.createBuffer(1, samples.length, 8000);
+    buffer.getChannelData(0).set(samples);
+
+    const src = audioCtx.createBufferSource();
+    src.buffer = buffer;
+    src.connect(audioCtx.destination);
+    src.onended = resolve;
+    src.start();
+
+    agentSpeaking = true;
+    setStatus("Agent speaking…", "speaking");
+  }).then(() => {
+    // Small tail — speaker rings down before mic reopens
+    return new Promise(r => setTimeout(r, 300));
+  }).then(() => {
+    agentSpeaking = false;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      setStatus("Listening…", "active");
+    }
+  });
+}
+
+// ─── Mic capture ──────────────────────────────────────────────────────────────
+function startMic() {
+  // ScriptProcessor captures PCM at the AudioContext sample rate (usually 44100
+  // or 48000). We need 16000 Hz for Deepgram, so we downsample manually.
+  // Simple approach: capture at 16000 Hz by creating AudioContext at that rate.
+  audioCtx = new AudioContext({ sampleRate: 16000 });
+
+  const source = audioCtx.createMediaStreamSource(mediaStream);
+
+  // 4096-sample buffer ≈ 256 ms @ 16 kHz — large enough to amortise WS overhead
+  scriptProcessor = audioCtx.createScriptProcessor(4096, 1, 1);
+
+  scriptProcessor.onaudioprocess = (e) => {
+    if (!ws || ws.readyState !== WebSocket.OPEN || agentSpeaking) return;
+
+    const float32 = e.inputBuffer.getChannelData(0);
+    // Convert Float32 → Int16 PCM
+    const pcm16 = new Int16Array(float32.length);
+    for (let i = 0; i < float32.length; i++) {
+      const s = Math.max(-1, Math.min(1, float32[i]));
+      pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+    }
+    ws.send(pcm16.buffer);
+  };
+
+  source.connect(scriptProcessor);
+  scriptProcessor.connect(audioCtx.destination); // required to fire onaudioprocess
+}
+
+function stopMic() {
+  if (scriptProcessor) { scriptProcessor.disconnect(); scriptProcessor = null; }
+  if (audioCtx) { audioCtx.close(); audioCtx = null; }
+  if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+}
+
+// ─── WebSocket ────────────────────────────────────────────────────────────────
+function connect() {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.binaryType = "arraybuffer";
+
+  ws.onopen = () => {
+    setStatus("Connected — speak now", "active");
+    startMic();
+  };
+
+  ws.onmessage = (e) => {
+    if (typeof e.data === "string") {
+      // "clear" signal — reset the playback queue
+      if (e.data === "clear") {
+        playbackQueue = Promise.resolve();
+        agentSpeaking = false;
+      }
+      return;
+    }
+    // Binary: μ-law audio blob
+    schedulePlayback(new Uint8Array(e.data));
+  };
+
+  ws.onclose = () => {
+    stopMic();
+    agentSpeaking = false;
+    setStatus("Disconnected — click to reconnect");
+    btn.className = "";
+    btn.textContent = "START";
+  };
+
+  ws.onerror = () => {
+    setStatus("Connection error");
+  };
+}
+
+function disconnect() {
+  if (ws) { ws.close(); ws = null; }
+  stopMic();
+  agentSpeaking = false;
+  playbackQueue = Promise.resolve();
+}
+
+// ─── Button ───────────────────────────────────────────────────────────────────
+btn.addEventListener("click", async () => {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    disconnect();
+    btn.textContent = "START";
+    setStatus("Click to begin");
+    return;
+  }
+
+  setStatus("Requesting microphone…", "connecting");
+  btn.textContent = "…";
+
+  try {
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        sampleRate: 16000,
+        channelCount: 1,
+      }
+    });
+  } catch (err) {
+    setStatus("Microphone access denied");
+    btn.textContent = "START";
+    btn.className = "";
+    return;
+  }
+
+  btn.textContent = "END";
+  setStatus("Connecting…", "connecting");
+  connect();
+});
+</script>
+</body>
+</html>

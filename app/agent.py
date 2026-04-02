@@ -223,17 +223,15 @@ class ConversationSession:
 
     async def _audio_player(self, audio_queue: asyncio.Queue) -> None:
         """
-        Dequeue synthesized audio blobs and send them to Twilio in 160-byte
-        frames (20 ms of μ-law @ 8 kHz) at real-time pace.
+        Dequeue synthesized audio blobs and pass each full blob to send_audio.
+        Chunking for Twilio pacing is handled inside the send_audio callback
+        injected by the caller (main.py for Twilio, run_local_mic.py for local).
         """
         while True:
             audio = await audio_queue.get()
             if audio is _SENTINEL:
                 break
-            chunk_size = 160
-            for i in range(0, len(audio), chunk_size):
-                await self._send_audio(audio[i : i + chunk_size])
-                await asyncio.sleep(0.02)
+            await self._send_audio(audio)
 
     # ------------------------------------------------------------------ #
     # Interruption                                                         #
