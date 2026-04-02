@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     deepgram_api_key: str | None = None
     deepgram_stt_model: str = "nova-3"
     deepgram_tts_model: str = "aura-2-thalia-en"
-    utterance_end_ms: int = 700
+    utterance_end_ms: int = 1000
     barge_in_rms_threshold: int = 900
     barge_in_consecutive_frames: int = 3
     openai_api_key: str | None = None
