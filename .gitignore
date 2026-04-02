@@ -1,6 +1,0 @@
-logs/calls/*
-logs/*.jsonl
-logs/*.log
-*.env
-.pytest_cache/*
-__pycache__/
