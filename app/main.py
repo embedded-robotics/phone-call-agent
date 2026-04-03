@@ -11,6 +11,7 @@ WS   /ws                 Browser WebSocket — mic PCM in, μ-law audio out
 
 import asyncio
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
@@ -28,8 +29,7 @@ from app.telephony.twilio_handler import (
     parse_twilio_message,
 )
 
-logging.basicConfig(level=logging.INFO)
-logging.getLogger("app").setLevel(logging.DEBUG)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
 logger = logging.getLogger(__name__)
 

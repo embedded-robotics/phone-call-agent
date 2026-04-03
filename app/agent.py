@@ -107,7 +107,7 @@ class ConversationSession:
                 # audio player drops all in-flight blobs right now, before any
                 # coroutine gets a chance to run.
                 self._generation += 1
-                logger.debug("Interrupted — generation now %d", self._generation)
+                logger.info("Interrupted — generation now %d", self._generation)
                 # Schedule the browser/Twilio clear signal — fire and forget.
                 asyncio.create_task(self._cancel_pipeline())
                 asyncio.create_task(self._send_clear())
@@ -146,7 +146,7 @@ class ConversationSession:
         try:
             await self._pipeline_task
         except asyncio.CancelledError:
-            logger.debug("Pipeline cancelled (gen=%d)", generation)
+            logger.info("Pipeline cancelled (gen=%d)", generation)
 
     async def _pipeline(
         self,
@@ -183,7 +183,7 @@ class ConversationSession:
                 sentence, remainder = _split_at_boundary(buffer)
                 if not sentence:
                     break
-                logger.debug("Sentence ready: %s", sentence)
+                logger.info("Sentence ready: %s", sentence)
                 await sentence_queue.put(sentence)
                 buffer = remainder
 
@@ -203,7 +203,7 @@ class ConversationSession:
             if sentence is _SENTINEL:
                 await audio_queue.put(_SENTINEL)
                 break
-            logger.debug("Synthesizing: %s", sentence)
+            logger.info("Synthesizing: %s", sentence)
             audio = await self._tts.synthesize(sentence)
             if audio:
                 await audio_queue.put(audio)
@@ -223,7 +223,7 @@ class ConversationSession:
             if audio is _SENTINEL:
                 break
             if self._generation != generation:
-                logger.debug("Dropping stale audio blob (gen %d != %d)", generation, self._generation)
+                logger.info("Dropping stale audio blob (gen %d != %d)", generation, self._generation)
                 continue
             await self._send_audio(audio)
 

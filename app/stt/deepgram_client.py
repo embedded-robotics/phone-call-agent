@@ -26,11 +26,24 @@ class DeepgramSTT:
 
     async def connect(self) -> None:
         self._task = asyncio.create_task(self._run())
-        try:
-            await asyncio.wait_for(self._ready.wait(), timeout=5.0)
-        except asyncio.TimeoutError:
+        # Wait for either _ready (success) or the task completing early (failure).
+        ready_waiter = asyncio.create_task(self._ready.wait())
+        done, _ = await asyncio.wait(
+            [self._task, ready_waiter],
+            timeout=5.0,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        # Always cancel the ready_waiter — it's a helper, not the main task.
+        ready_waiter.cancel()
+
+        if not done:
             self._task.cancel()
             raise RuntimeError("Deepgram connection timed out")
+
+        if self._task in done and not self._ready.is_set():
+            exc = self._task.exception()
+            raise RuntimeError(f"Deepgram connection failed: {exc}")
+
         logger.info("Deepgram STT connected")
 
     async def send_audio(self, chunk: bytes) -> None:
@@ -52,25 +65,28 @@ class DeepgramSTT:
         logger.info("Deepgram STT closed")
 
     async def _run(self) -> None:
-        async with self._client.listen.v1.connect(
-            model="nova-2",
-            encoding="mulaw",
-            sample_rate=8000,
-            channels=1,
-            punctuate=True,
-            interim_results=True,
-            utterance_end_ms=self._utterance_end_ms,
-            vad_events=True,
-        ) as ws:
-            self._socket = ws
-            self._ready.set()
-            async for msg in ws:
-                if isinstance(msg, ListenV1Results):
-                    try:
-                        text = msg.channel.alternatives[0].transcript.strip()
-                        if text:
-                            self._on_transcript(text, bool(msg.is_final))
-                    except (AttributeError, IndexError):
-                        pass
-                elif isinstance(msg, ListenV1UtteranceEnd):
-                    self._on_utterance_end()
+        try:
+            async with self._client.listen.v1.connect(
+                model="nova-2",
+                encoding="mulaw",
+                sample_rate=8000,
+                channels=1,
+                punctuate="true",
+                interim_results="true",
+                utterance_end_ms=self._utterance_end_ms,
+                vad_events="true",
+            ) as ws:
+                self._socket = ws
+                self._ready.set()
+                async for msg in ws:
+                    if isinstance(msg, ListenV1Results):
+                        try:
+                            text = msg.channel.alternatives[0].transcript.strip()
+                            if text:
+                                self._on_transcript(text, bool(msg.is_final))
+                        except (AttributeError, IndexError):
+                            pass
+                    elif isinstance(msg, ListenV1UtteranceEnd):
+                        self._on_utterance_end()
+        finally:
+            self._socket = None

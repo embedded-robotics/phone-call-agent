@@ -43,7 +43,7 @@ class OpenAIAgent:
         assistant_text = "".join(full_reply)
         if assistant_text:
             self._messages.append({"role": "assistant", "content": assistant_text})
-        logger.debug("OpenAI reply: %s", assistant_text)
+        logger.info("OpenAI reply: %s", assistant_text)
 
     def reset(self) -> None:
         """Clear conversation history (keep system prompt)."""
