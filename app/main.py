@@ -29,6 +29,8 @@ from app.telephony.twilio_handler import (
 )
 
 logging.basicConfig(level=logging.INFO)
+logging.getLogger("app").setLevel(logging.DEBUG)
+
 logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"

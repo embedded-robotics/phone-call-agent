@@ -9,18 +9,17 @@ Three concurrent asyncio tasks run for every agent turn:
   TTS synthesizer  dequeues sentences, calls ElevenLabs immediately (no waiting
                    for the full LLM response), pushes audio bytes into audio_queue.
 
-  Audio player     dequeues audio chunks, sends 160-byte frames to Twilio in order.
+  Audio player     dequeues audio blobs, passes them to the injected send_audio callback.
 
-Timeline example for "Sure, I can help. What's your account number?":
+Interruption via generation counter
+------------------------------------
+Every pipeline run is stamped with a monotonically increasing _generation number.
+_interrupt() increments the counter before cancelling the asyncio task.
+Any audio blob that arrives in _audio_player after the generation has changed is
+silently dropped — even if httpx finished delivering the response before the
+asyncio CancelledError propagated to the synthesizer coroutine.
 
-  t=0ms   GPT starts streaming
-  t=240ms sentence 1 complete → TTS synthesis starts immediately
-  t=540ms sentence 1 audio ready → playback starts
-  t=560ms sentence 2 complete → TTS synthesis starts (overlaps playback)
-  t=860ms sentence 2 audio ready → plays right after sentence 1 finishes
-
-Without pipelining the total wait would be ~1500ms. With pipelining the caller
-hears the first words at ~540ms.
+This makes interruption reliable regardless of httpx cancellation timing.
 """
 
 import asyncio
@@ -36,20 +35,13 @@ logger = logging.getLogger(__name__)
 
 GREETING = "Hello! How can I help you today?"
 _SENTENCE_ENDS = frozenset(".?!")
-_SENTINEL = None  # queue termination marker
+_SENTINEL = None
 
 
 def _split_at_boundary(buffer: str) -> tuple[str, str]:
-    """
-    Split buffer at the first sentence-ending character (.?!).
-    Returns (sentence_including_punctuation, remaining_text).
-    Returns ("", buffer) if no boundary found.
-    """
     for i, ch in enumerate(buffer):
         if ch in _SENTENCE_ENDS:
-            sentence = buffer[: i + 1].strip()
-            remainder = buffer[i + 1 :].lstrip()
-            return sentence, remainder
+            return buffer[: i + 1].strip(), buffer[i + 1 :].lstrip()
     return "", buffer
 
 
@@ -59,9 +51,9 @@ class ConversationSession:
         Parameters
         ----------
         send_audio : async callable(audio_bytes: bytes) -> None
-            Sends μ-law audio bytes to the caller via Twilio WebSocket.
+            Sends a μ-law audio blob to the client (browser WS or Twilio WS).
         send_clear : async callable() -> None
-            Flushes Twilio's audio buffer (used on interruption).
+            Signals the client to discard buffered audio on interruption.
         """
         self._send_audio = send_audio
         self._send_clear = send_clear
@@ -84,6 +76,7 @@ class ConversationSession:
         self._transcript_buffer: list[str] = []
         self._agent_speaking = False
         self._pipeline_task: Optional[asyncio.Task] = None
+        self._generation: int = 0      # incremented on every interrupt
 
     # ------------------------------------------------------------------ #
     # Public API                                                           #
@@ -110,7 +103,14 @@ class ConversationSession:
         if is_final:
             self._transcript_buffer.append(text)
             if self._agent_speaking:
-                asyncio.create_task(self._interrupt())
+                # Increment generation immediately (sync — no await) so the
+                # audio player drops all in-flight blobs right now, before any
+                # coroutine gets a chance to run.
+                self._generation += 1
+                logger.debug("Interrupted — generation now %d", self._generation)
+                # Schedule the browser/Twilio clear signal — fire and forget.
+                asyncio.create_task(self._cancel_pipeline())
+                asyncio.create_task(self._send_clear())
 
     def _on_utterance_end(self) -> None:
         if not self._transcript_buffer:
@@ -129,15 +129,11 @@ class ConversationSession:
         await self._run_pipeline(user_text, is_greeting=False)
 
     async def _run_pipeline(self, text_or_prompt: str, *, is_greeting: bool) -> None:
-        """
-        Launch the 3-task pipeline and track it so it can be cancelled on
-        interruption. For the greeting, text_or_prompt is the literal string
-        to speak. For LLM turns, it is the user utterance.
-        """
         await self._cancel_pipeline()
 
         sentence_queue: asyncio.Queue = asyncio.Queue()
         audio_queue: asyncio.Queue = asyncio.Queue()
+        generation = self._generation          # capture current generation
 
         if is_greeting:
             producer = self._greeting_producer(text_or_prompt, sentence_queue)
@@ -145,21 +141,26 @@ class ConversationSession:
             producer = self._llm_producer(text_or_prompt, sentence_queue)
 
         self._pipeline_task = asyncio.create_task(
-            self._pipeline(producer, sentence_queue, audio_queue)
+            self._pipeline(producer, sentence_queue, audio_queue, generation)
         )
         try:
             await self._pipeline_task
         except asyncio.CancelledError:
-            logger.debug("Pipeline cancelled")
+            logger.debug("Pipeline cancelled (gen=%d)", generation)
 
-    async def _pipeline(self, producer, sentence_queue, audio_queue) -> None:
-        """Run producer, synthesizer, and player concurrently."""
+    async def _pipeline(
+        self,
+        producer,
+        sentence_queue: asyncio.Queue,
+        audio_queue: asyncio.Queue,
+        generation: int,
+    ) -> None:
         self._agent_speaking = True
         try:
             await asyncio.gather(
                 producer,
                 self._tts_synthesizer(sentence_queue, audio_queue),
-                self._audio_player(audio_queue),
+                self._audio_player(audio_queue, generation),
             )
         finally:
             self._agent_speaking = False
@@ -169,17 +170,12 @@ class ConversationSession:
     async def _greeting_producer(
         self, greeting: str, sentence_queue: asyncio.Queue
     ) -> None:
-        """Push the greeting as a single sentence then signal done."""
         await sentence_queue.put(greeting)
         await sentence_queue.put(_SENTINEL)
 
     async def _llm_producer(
         self, user_text: str, sentence_queue: asyncio.Queue
     ) -> None:
-        """
-        Stream GPT-4o tokens, split at sentence boundaries, enqueue sentences.
-        Flushes any remaining text after the stream ends.
-        """
         buffer = ""
         async for token in self._llm.respond(user_text):
             buffer += token
@@ -191,10 +187,8 @@ class ConversationSession:
                 await sentence_queue.put(sentence)
                 buffer = remainder
 
-        # Flush leftover text (no trailing punctuation)
         if buffer.strip():
             await sentence_queue.put(buffer.strip())
-
         await sentence_queue.put(_SENTINEL)
 
     # Synthesizer ---------------------------------------------------------
@@ -204,11 +198,6 @@ class ConversationSession:
         sentence_queue: asyncio.Queue,
         audio_queue: asyncio.Queue,
     ) -> None:
-        """
-        Dequeue sentences and synthesize them as fast as ElevenLabs allows.
-        Runs concurrently with the LLM producer, so synthesis of sentence N
-        overlaps with GPT generation of sentence N+1.
-        """
         while True:
             sentence = await sentence_queue.get()
             if sentence is _SENTINEL:
@@ -221,16 +210,21 @@ class ConversationSession:
 
     # Player --------------------------------------------------------------
 
-    async def _audio_player(self, audio_queue: asyncio.Queue) -> None:
+    async def _audio_player(
+        self, audio_queue: asyncio.Queue, generation: int
+    ) -> None:
         """
-        Dequeue synthesized audio blobs and pass each full blob to send_audio.
-        Chunking for Twilio pacing is handled inside the send_audio callback
-        injected by the caller (main.py for Twilio, run_local_mic.py for local).
+        Send audio blobs to the client.
+        Checks generation before every send — blobs produced by a cancelled
+        pipeline are dropped even if httpx delivered them after cancellation.
         """
         while True:
             audio = await audio_queue.get()
             if audio is _SENTINEL:
                 break
+            if self._generation != generation:
+                logger.debug("Dropping stale audio blob (gen %d != %d)", generation, self._generation)
+                continue
             await self._send_audio(audio)
 
     # ------------------------------------------------------------------ #
@@ -247,6 +241,3 @@ class ConversationSession:
         self._pipeline_task = None
         self._agent_speaking = False
 
-    async def _interrupt(self) -> None:
-        await self._cancel_pipeline()
-        await self._send_clear()

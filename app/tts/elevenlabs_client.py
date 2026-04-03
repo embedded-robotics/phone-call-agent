@@ -1,11 +1,13 @@
 """
 ElevenLabs Text-to-Speech client.
 
-Requests audio in ulaw_8000 format directly (μ-law 8 kHz mono) — exactly what
-Twilio expects — so no conversion is needed.
+Requests audio in ulaw_8000 format natively (μ-law 8 kHz mono) via the
+output_format query parameter. This format is consumed directly by:
+  - Twilio Media Streams (sent as 160-byte base64 chunks)
+  - The browser UI (decoded with an inline G.711 μ-law table in JS)
 
-IMPORTANT: output_format is a query parameter on the ElevenLabs API, not a
-JSON body field. Passing it in the body is silently ignored and MP3 is returned.
+IMPORTANT: output_format must be a URL query parameter, not a JSON body field.
+Passing it in the body is silently ignored and MP3 is returned instead.
 """
 
 import logging
@@ -28,7 +30,7 @@ class ElevenLabsTTS:
 
     async def synthesize(self, text: str) -> bytes:
         """
-        Convert text to μ-law 8 kHz bytes ready to send to Twilio.
+        Convert text to μ-law 8 kHz bytes (native ulaw_8000 from ElevenLabs).
         Returns empty bytes if synthesis fails.
         """
         headers = {

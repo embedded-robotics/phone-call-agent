@@ -111,7 +111,9 @@ let audioCtx = null;
 let mediaStream = null;
 let scriptProcessor = null;
 let agentSpeaking = false;
-let playbackQueue = Promise.resolve(); // serialise audio blobs
+let playbackQueue = Promise.resolve();
+let currentSource = null;   // currently playing AudioBufferSource
+let cleared = false;        // drop blobs that arrive just before a clear
 
 const btn = document.getElementById("btn");
 const statusEl = document.getElementById("status");
@@ -155,13 +157,20 @@ function addMessage(role, text) {
 
 // ─── Audio playback ───────────────────────────────────────────────────────────
 function schedulePlayback(mulaw) {
-  // Enqueue blobs so they play in order without overlap
+  if (cleared) return;  // drop blobs that arrived just before or with a clear
   playbackQueue = playbackQueue.then(() => playBlob(mulaw));
+}
+
+function stopCurrentSource() {
+  if (currentSource) {
+    try { currentSource.stop(); } catch (_) {}
+    currentSource = null;
+  }
 }
 
 function playBlob(mulaw) {
   return new Promise(resolve => {
-    if (!audioCtx) { resolve(); return; }
+    if (!audioCtx || cleared) { resolve(); return; }
 
     const samples = mulawToFloat32(mulaw);
     const buffer  = audioCtx.createBuffer(1, samples.length, 8000);
@@ -170,18 +179,21 @@ function playBlob(mulaw) {
     const src = audioCtx.createBufferSource();
     src.buffer = buffer;
     src.connect(audioCtx.destination);
-    src.onended = resolve;
+    src.onended = () => { currentSource = null; resolve(); };
+    currentSource = src;
     src.start();
 
     agentSpeaking = true;
     setStatus("Agent speaking…", "speaking");
   }).then(() => {
-    // Small tail — speaker rings down before mic reopens
-    return new Promise(r => setTimeout(r, 300));
+    if (cleared) return;  // skip tail silence if we were cleared
+    return new Promise(r => setTimeout(r, 200));
   }).then(() => {
-    agentSpeaking = false;
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      setStatus("Listening…", "active");
+    if (!cleared) {
+      agentSpeaking = false;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        setStatus("Listening…", "active");
+      }
     }
   });
 }
@@ -195,11 +207,11 @@ function startMic() {
 
   const source = audioCtx.createMediaStreamSource(mediaStream);
 
-  // 4096-sample buffer ≈ 256 ms @ 16 kHz — large enough to amortise WS overhead
-  scriptProcessor = audioCtx.createScriptProcessor(4096, 1, 1);
+  // 1024-sample buffer ≈ 64 ms @ 16 kHz — low latency for fast interruption
+  scriptProcessor = audioCtx.createScriptProcessor(1024, 1, 1);
 
   scriptProcessor.onaudioprocess = (e) => {
-    if (!ws || ws.readyState !== WebSocket.OPEN || agentSpeaking) return;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
     const float32 = e.inputBuffer.getChannelData(0);
     // Convert Float32 → Int16 PCM
@@ -234,10 +246,14 @@ function connect() {
 
   ws.onmessage = (e) => {
     if (typeof e.data === "string") {
-      // "clear" signal — reset the playback queue
       if (e.data === "clear") {
+        cleared = true;
+        stopCurrentSource();         // stop any currently playing audio immediately
         playbackQueue = Promise.resolve();
         agentSpeaking = false;
+        setStatus("Listening…", "active");
+        // Allow new blobs from the next response to queue normally
+        setTimeout(() => { cleared = false; }, 300);
       }
       return;
     }
