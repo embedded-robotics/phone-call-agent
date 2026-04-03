@@ -10,6 +10,7 @@ WS   /ws                 Browser WebSocket — mic PCM in, μ-law audio out
 """
 
 import asyncio
+import json
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -120,12 +121,21 @@ async def browser_ws(websocket: WebSocket) -> None:
         # Signal the browser to stop any queued playback
         await websocket.send_text("clear")
 
-    session = ConversationSession(send_audio=send_audio, send_clear=send_clear)
+    async def send_metrics(metrics: dict) -> None:
+        await websocket.send_text(json.dumps({"type": "metrics", **metrics}))
+
+    session = ConversationSession(send_audio=send_audio, send_clear=send_clear, send_metrics=send_metrics)
     await session.start()
 
     try:
-        async for data in websocket.iter_bytes():
-            await session.feed_audio(_pcm16k_to_mulaw8k(data))
+        while True:
+            msg = await websocket.receive()
+            if msg["type"] == "websocket.disconnect":
+                break
+            if "bytes" in msg and msg["bytes"]:
+                await session.feed_audio(_pcm16k_to_mulaw8k(msg["bytes"]))
+            elif msg.get("text") == "playback_done":
+                session.notify_playback_done()
     except WebSocketDisconnect:
         logger.info("Browser WebSocket disconnected")
     finally:

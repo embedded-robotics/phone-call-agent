@@ -24,6 +24,7 @@ This makes interruption reliable regardless of httpx cancellation timing.
 
 import asyncio
 import logging
+import time
 from typing import Optional
 
 from app.config import settings
@@ -46,7 +47,7 @@ def _split_at_boundary(buffer: str) -> tuple[str, str]:
 
 
 class ConversationSession:
-    def __init__(self, send_audio, send_clear) -> None:
+    def __init__(self, send_audio, send_clear, send_metrics=None) -> None:
         """
         Parameters
         ----------
@@ -54,9 +55,12 @@ class ConversationSession:
             Sends a μ-law audio blob to the client (browser WS or Twilio WS).
         send_clear : async callable() -> None
             Signals the client to discard buffered audio on interruption.
+        send_metrics : async callable(metrics: dict) -> None, optional
+            Receives per-turn latency metrics: stt_ms, llm_ms, tts_ms.
         """
         self._send_audio = send_audio
         self._send_clear = send_clear
+        self._send_metrics = send_metrics
 
         self._llm = OpenAIAgent(
             api_key=settings.openai_api_key,
@@ -74,9 +78,11 @@ class ConversationSession:
         )
 
         self._transcript_buffer: list[str] = []
-        self._agent_speaking = False
+        self._agent_speaking = False   # True while LLM/TTS pipeline is running
+        self._playback_active = False  # True while browser still has audio queued
         self._pipeline_task: Optional[asyncio.Task] = None
         self._generation: int = 0      # incremented on every interrupt
+        self._utterance_end_time: float = 0.0
 
     # ------------------------------------------------------------------ #
     # Public API                                                           #
@@ -99,14 +105,19 @@ class ConversationSession:
     # STT callbacks                                                        #
     # ------------------------------------------------------------------ #
 
+    def notify_playback_done(self) -> None:
+        """Called when the browser finishes playing all queued audio."""
+        self._playback_active = False
+
     def _on_transcript(self, text: str, is_final: bool) -> None:
         if is_final:
             self._transcript_buffer.append(text)
-            if self._agent_speaking:
+            if self._agent_speaking or self._playback_active:
                 # Increment generation immediately (sync — no await) so the
                 # audio player drops all in-flight blobs right now, before any
                 # coroutine gets a chance to run.
                 self._generation += 1
+                self._playback_active = False
                 logger.info("Interrupted — generation now %d", self._generation)
                 # Schedule the browser/Twilio clear signal — fire and forget.
                 asyncio.create_task(self._cancel_pipeline())
@@ -118,6 +129,7 @@ class ConversationSession:
         user_text = " ".join(self._transcript_buffer).strip()
         self._transcript_buffer.clear()
         if user_text:
+            self._utterance_end_time = time.monotonic()
             asyncio.create_task(self._respond(user_text))
 
     # ------------------------------------------------------------------ #
@@ -137,11 +149,13 @@ class ConversationSession:
 
         if is_greeting:
             producer = self._greeting_producer(text_or_prompt, sentence_queue)
+            timing = None
         else:
-            producer = self._llm_producer(text_or_prompt, sentence_queue)
+            timing: Optional[dict] = {}
+            producer = self._llm_producer(text_or_prompt, sentence_queue, timing)
 
         self._pipeline_task = asyncio.create_task(
-            self._pipeline(producer, sentence_queue, audio_queue, generation)
+            self._pipeline(producer, sentence_queue, audio_queue, generation, timing)
         )
         try:
             await self._pipeline_task
@@ -154,12 +168,13 @@ class ConversationSession:
         sentence_queue: asyncio.Queue,
         audio_queue: asyncio.Queue,
         generation: int,
+        timing: Optional[dict],
     ) -> None:
         self._agent_speaking = True
         try:
             await asyncio.gather(
                 producer,
-                self._tts_synthesizer(sentence_queue, audio_queue),
+                self._tts_synthesizer(sentence_queue, audio_queue, timing),
                 self._audio_player(audio_queue, generation),
             )
         finally:
@@ -174,10 +189,17 @@ class ConversationSession:
         await sentence_queue.put(_SENTINEL)
 
     async def _llm_producer(
-        self, user_text: str, sentence_queue: asyncio.Queue
+        self, user_text: str, sentence_queue: asyncio.Queue, timing: dict
     ) -> None:
+        t_llm_start = time.monotonic()
+        timing["stt_ms"] = round((t_llm_start - self._utterance_end_time) * 1000)
+
         buffer = ""
+        first_token = True
         async for token in self._llm.respond(user_text):
+            if first_token:
+                timing["llm_ms"] = round((time.monotonic() - t_llm_start) * 1000)
+                first_token = False
             buffer += token
             while True:
                 sentence, remainder = _split_at_boundary(buffer)
@@ -197,14 +219,23 @@ class ConversationSession:
         self,
         sentence_queue: asyncio.Queue,
         audio_queue: asyncio.Queue,
+        timing: Optional[dict],
     ) -> None:
+        first = True
         while True:
             sentence = await sentence_queue.get()
             if sentence is _SENTINEL:
                 await audio_queue.put(_SENTINEL)
                 break
             logger.info("Synthesizing: %s", sentence)
+            t0 = time.monotonic()
             audio = await self._tts.synthesize(sentence)
+            if first:
+                first = False
+                if timing is not None:
+                    timing["tts_ms"] = round((time.monotonic() - t0) * 1000)
+                    if self._send_metrics and all(k in timing for k in ("stt_ms", "llm_ms", "tts_ms")):
+                        asyncio.create_task(self._send_metrics(timing.copy()))
             if audio:
                 await audio_queue.put(audio)
 
@@ -225,6 +256,7 @@ class ConversationSession:
             if self._generation != generation:
                 logger.info("Dropping stale audio blob (gen %d != %d)", generation, self._generation)
                 continue
+            self._playback_active = True
             await self._send_audio(audio)
 
     # ------------------------------------------------------------------ #
@@ -240,4 +272,4 @@ class ConversationSession:
                 pass
         self._pipeline_task = None
         self._agent_speaking = False
-
+        self._playback_active = False

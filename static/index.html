@@ -92,6 +92,44 @@
       text-transform: uppercase;
       letter-spacing: 0.06em;
     }
+
+    #metrics {
+      width: min(520px, 90vw);
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+    }
+
+    .metric-card {
+      background: #161616;
+      border: 1px solid #2a2a2a;
+      border-radius: 10px;
+      padding: 12px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .metric-card .metric-label {
+      font-size: 0.7rem;
+      color: #555;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+    }
+    .metric-card .metric-value {
+      font-size: 1.3rem;
+      font-weight: 600;
+      color: #c0c0c0;
+      font-variant-numeric: tabular-nums;
+    }
+    .metric-card .metric-value span {
+      font-size: 0.75rem;
+      font-weight: 400;
+      color: #555;
+    }
+    .metric-card .metric-last {
+      font-size: 0.72rem;
+      color: #444;
+    }
   </style>
 </head>
 <body>
@@ -102,9 +140,60 @@
 
 <div id="status">Click to begin</div>
 
+<div id="metrics">
+  <div class="metric-card">
+    <div class="metric-label">STT handoff</div>
+    <div class="metric-value" id="stt-avg">—<span> ms</span></div>
+    <div class="metric-last" id="stt-last"></div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">LLM first token</div>
+    <div class="metric-value" id="llm-avg">—<span> ms</span></div>
+    <div class="metric-last" id="llm-last"></div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">TTS first audio</div>
+    <div class="metric-value" id="tts-avg">—<span> ms</span></div>
+    <div class="metric-last" id="tts-last"></div>
+  </div>
+</div>
+
 <div id="transcript"></div>
 
 <script>
+// ─── Playback tracking ────────────────────────────────────────────────────────
+let pendingBlobs = 0;
+
+function onBlobFinished() {
+  pendingBlobs--;
+  if (pendingBlobs === 0 && ws && ws.readyState === WebSocket.OPEN) {
+    ws.send("playback_done");
+  }
+}
+
+// ─── Latency metrics ──────────────────────────────────────────────────────────
+const WINDOW = 5;  // rolling average over last N turns
+const history = { stt: [], llm: [], tts: [] };
+
+function updateMetrics({ stt_ms, llm_ms, tts_ms }) {
+  const push = (arr, val) => { arr.push(val); if (arr.length > WINDOW) arr.shift(); };
+  push(history.stt, stt_ms);
+  push(history.llm, llm_ms);
+  push(history.tts, tts_ms);
+
+  const avg = arr => Math.round(arr.reduce((a, b) => a + b, 0) / arr.length);
+
+  const render = (avgEl, lastEl, arr) => {
+    const a = avg(arr);
+    avgEl.childNodes[0].textContent = a;
+    lastEl.textContent = `last: ${arr[arr.length - 1]} ms`;
+  };
+
+  render(document.getElementById("stt-avg"), document.getElementById("stt-last"), history.stt);
+  render(document.getElementById("llm-avg"), document.getElementById("llm-last"), history.llm);
+  render(document.getElementById("tts-avg"), document.getElementById("tts-last"), history.tts);
+}
+
 // ─── State ────────────────────────────────────────────────────────────────────
 let ws = null;
 let audioCtx = null;
@@ -158,7 +247,8 @@ function addMessage(role, text) {
 // ─── Audio playback ───────────────────────────────────────────────────────────
 function schedulePlayback(mulaw) {
   if (cleared) return;  // drop blobs that arrived just before or with a clear
-  playbackQueue = playbackQueue.then(() => playBlob(mulaw));
+  pendingBlobs++;
+  playbackQueue = playbackQueue.then(() => playBlob(mulaw)).then(onBlobFinished);
 }
 
 function stopCurrentSource() {
@@ -248,12 +338,18 @@ function connect() {
     if (typeof e.data === "string") {
       if (e.data === "clear") {
         cleared = true;
+        pendingBlobs = 0;
         stopCurrentSource();         // stop any currently playing audio immediately
         playbackQueue = Promise.resolve();
         agentSpeaking = false;
         setStatus("Listening…", "active");
         // Allow new blobs from the next response to queue normally
         setTimeout(() => { cleared = false; }, 300);
+      } else {
+        try {
+          const msg = JSON.parse(e.data);
+          if (msg.type === "metrics") updateMetrics(msg);
+        } catch (_) {}
       }
       return;
     }
