@@ -5,160 +5,769 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Phone Call Agent</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      /* Core palette */
+      --bg:          #060609;
+      --bg2:         #0d0d14;
+      --surface:     #111118;
+      --surface2:    #181820;
+      --surface3:    #1e1e2a;
+      --border:      #1f1f2e;
+      --border2:     #2a2a3d;
+      --border3:     #353550;
+
+      /* Text */
+      --text:        #eeeef5;
+      --text2:       #a0a0c0;
+      --muted:       #55556a;
+
+      /* Accent — violet */
+      --accent:      #8b5cf6;
+      --accent2:     #a78bfa;
+      --accent-glow: rgba(139,92,246,0.35);
+      --accent-dim:  rgba(139,92,246,0.12);
+
+      /* State colors */
+      --green:       #34d399;
+      --green-glow:  rgba(52,211,153,0.3);
+      --green-dim:   rgba(52,211,153,0.08);
+      --blue:        #60a5fa;
+      --blue-glow:   rgba(96,165,250,0.3);
+      --blue-dim:    rgba(96,165,250,0.08);
+      --amber:       #fbbf24;
+      --amber-dim:   rgba(251,191,36,0.08);
+      --red:         #f87171;
+
+      /* Layout */
+      --radius-sm:   8px;
+      --radius:      14px;
+      --radius-lg:   20px;
+      --sidebar-w:   320px;
+    }
+
+    html, body { height: 100%; }
 
     body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: #0f0f0f;
-      color: #e0e0e0;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Subtle noise + grid background ─────────────────────── */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image:
+        radial-gradient(ellipse 80% 50% at 20% -10%, rgba(139,92,246,0.07) 0%, transparent 60%),
+        radial-gradient(ellipse 60% 40% at 80% 100%, rgba(96,165,250,0.05) 0%, transparent 60%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* ── App shell ───────────────────────────────────────────── */
+    .app {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 0 24px;
+      width: 100%;
+    }
+
+    /* ── Top nav ─────────────────────────────────────────────── */
+    nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 20px 0 18px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .nav-logo {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .nav-logo-mark {
+      width: 38px; height: 38px;
+      border-radius: 11px;
+      background: linear-gradient(135deg, var(--accent) 0%, var(--accent2) 100%);
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 0 20px var(--accent-glow);
+      font-size: 18px;
+      flex-shrink: 0;
+    }
+    .nav-title   { font-size: 1rem; font-weight: 600; letter-spacing: -0.02em; }
+    .nav-tagline { font-size: 0.72rem; color: var(--muted); margin-top: 1px; }
+
+    .nav-right { display: flex; align-items: center; gap: 12px; }
+
+    /* Pill badge */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.72rem;
+      padding: 5px 11px;
+      border-radius: 20px;
+      border: 1px solid var(--border2);
+      color: var(--muted);
+      background: var(--surface);
+      transition: all 0.3s ease;
+      letter-spacing: 0.03em;
+      font-weight: 500;
+    }
+    .badge-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--muted);
+      transition: all 0.3s;
+      flex-shrink: 0;
+    }
+    .badge.active    { border-color: rgba(52,211,153,0.4); color: var(--green); background: var(--green-dim); }
+    .badge.active .badge-dot { background: var(--green); box-shadow: 0 0 6px var(--green-glow); animation: dot-pulse 2s infinite; }
+    .badge.speaking  { border-color: rgba(96,165,250,0.4); color: var(--blue);  background: var(--blue-dim); }
+    .badge.speaking .badge-dot { background: var(--blue); box-shadow: 0 0 6px var(--blue-glow); animation: dot-pulse 1s infinite; }
+    .badge.connecting{ border-color: rgba(251,191,36,0.4); color: var(--amber); background: var(--amber-dim); }
+    .badge.connecting .badge-dot { background: var(--amber); animation: dot-spin 1s linear infinite; border-radius: 0; }
+    @keyframes dot-pulse {
+      0%,100% { opacity: 1; } 50% { opacity: 0.3; }
+    }
+    @keyframes dot-spin {
+      from { transform: rotate(0deg); } to { transform: rotate(360deg); }
+    }
+
+    /* ── Two-column layout ───────────────────────────────────── */
+    .columns {
+      display: grid;
+      grid-template-columns: var(--sidebar-w) 1fr;
+      gap: 20px;
+      padding: 20px 0 32px;
+      flex: 1;
+      align-items: start;
+    }
+
+    /* ── LEFT COLUMN ─────────────────────────────────────────── */
+    .sidebar {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      position: sticky;
+      top: 20px;
+    }
+
+    /* Panel card */
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .panel-header {
+      padding: 14px 16px 12px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .panel-icon {
+      width: 28px; height: 28px;
+      border-radius: 8px;
+      background: var(--accent-dim);
+      border: 1px solid rgba(139,92,246,0.2);
+      display: flex; align-items: center; justify-content: center;
+      color: var(--accent2);
+      flex-shrink: 0;
+    }
+    .panel-title { font-size: 0.8rem; font-weight: 600; letter-spacing: -0.01em; }
+    .panel-body  { padding: 16px; }
+
+    /* ── Big call button ─────────────────────────────────────── */
+    .call-panel .panel-body {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 20px;
+      padding: 28px 16px 24px;
+    }
+
+    .btn-ring {
+      position: relative;
+      width: 88px; height: 88px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    /* Animated ring behind the button */
+    .btn-ring::before, .btn-ring::after {
+      content: '';
+      position: absolute;
+      border-radius: 50%;
+      border: 1.5px solid var(--accent);
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+    .btn-ring::before { inset: -10px; }
+    .btn-ring::after  { inset: -20px; }
+    .btn-ring.active::before  { opacity: 0.25; animation: ring-pulse 2s ease infinite; }
+    .btn-ring.active::after   { opacity: 0.12; animation: ring-pulse 2s ease infinite 0.4s; }
+    .btn-ring.speaking::before { border-color: var(--blue); opacity: 0.3; animation: ring-pulse 1.2s ease infinite; }
+    .btn-ring.speaking::after  { border-color: var(--blue); opacity: 0.15; animation: ring-pulse 1.2s ease infinite 0.3s; }
+    @keyframes ring-pulse {
+      0%   { transform: scale(1);    opacity: inherit; }
+      100% { transform: scale(1.15); opacity: 0; }
+    }
+
+    #btn {
+      width: 72px; height: 72px;
+      border-radius: 50%;
+      border: none;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: transform 0.2s, box-shadow 0.2s;
+      outline: none;
+      background: linear-gradient(145deg, var(--accent) 0%, var(--accent2) 100%);
+      box-shadow: 0 8px 32px var(--accent-glow), 0 2px 8px rgba(0,0,0,0.4);
+      position: relative;
+      z-index: 1;
+    }
+    #btn:hover   { transform: scale(1.06); box-shadow: 0 12px 40px var(--accent-glow), 0 2px 8px rgba(0,0,0,0.4); }
+    #btn:active  { transform: scale(0.97); }
+    #btn.active  {
+      background: linear-gradient(145deg, var(--green) 0%, #6ee7b7 100%);
+      box-shadow: 0 8px 32px var(--green-glow), 0 2px 8px rgba(0,0,0,0.4);
+    }
+    #btn.speaking {
+      background: linear-gradient(145deg, var(--blue) 0%, #93c5fd 100%);
+      box-shadow: 0 8px 32px var(--blue-glow), 0 2px 8px rgba(0,0,0,0.4);
+    }
+    #btn.connecting {
+      background: linear-gradient(145deg, var(--amber) 0%, #fcd34d 100%);
+      box-shadow: 0 8px 24px rgba(251,191,36,0.3), 0 2px 8px rgba(0,0,0,0.4);
+    }
+    #btn svg { pointer-events: none; }
+
+    .call-status-block { text-align: center; }
+    #status-line { font-size: 0.92rem; font-weight: 600; color: var(--text); }
+    #status-sub  { font-size: 0.75rem; color: var(--muted); margin-top: 3px; }
+
+    /* ── Waveform visualizer ─────────────────────────────────── */
+    .wave-container {
+      width: 100%;
+      height: 36px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+    }
+    .wave-bar {
+      width: 3px;
+      border-radius: 3px;
+      background: var(--border2);
+      transition: height 0.1s ease, background 0.3s;
+      height: 4px;
+    }
+    .wave-container.active .wave-bar {
+      background: var(--green);
+      animation: wave-idle 1.4s ease infinite;
+    }
+    .wave-container.speaking .wave-bar {
+      background: var(--blue);
+      animation: wave-idle 0.8s ease infinite;
+    }
+    .wave-bar:nth-child(1)  { animation-delay: 0.0s; }
+    .wave-bar:nth-child(2)  { animation-delay: 0.1s; }
+    .wave-bar:nth-child(3)  { animation-delay: 0.2s; }
+    .wave-bar:nth-child(4)  { animation-delay: 0.3s; }
+    .wave-bar:nth-child(5)  { animation-delay: 0.4s; }
+    .wave-bar:nth-child(6)  { animation-delay: 0.3s; }
+    .wave-bar:nth-child(7)  { animation-delay: 0.2s; }
+    .wave-bar:nth-child(8)  { animation-delay: 0.1s; }
+    .wave-bar:nth-child(9)  { animation-delay: 0.0s; }
+    .wave-bar:nth-child(10) { animation-delay: 0.15s; }
+    .wave-bar:nth-child(11) { animation-delay: 0.25s; }
+    .wave-bar:nth-child(12) { animation-delay: 0.35s; }
+    @keyframes wave-idle {
+      0%, 100% { height: 4px;  opacity: 0.5; }
+      50%       { height: 22px; opacity: 1; }
+    }
+
+    /* ── Metric cards ─────────────────────────────────────────── */
+    .metrics-grid {
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .metric-item {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 12px 14px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      transition: border-color 0.3s;
+    }
+    .metric-item:hover { border-color: var(--border2); }
+    .metric-icon {
+      width: 32px; height: 32px;
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+      font-size: 14px;
+    }
+    .metric-icon.stt { background: rgba(251,191,36,0.1); }
+    .metric-icon.llm { background: rgba(139,92,246,0.1); }
+    .metric-icon.tts { background: rgba(52,211,153,0.1); }
+    .metric-info { flex: 1; min-width: 0; }
+    .metric-label { font-size: 0.68rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.07em; }
+    .metric-val   {
+      font-size: 1.2rem; font-weight: 700;
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+      line-height: 1.2;
+      margin-top: 1px;
+    }
+    .metric-val span { font-size: 0.68rem; font-weight: 400; color: var(--muted); }
+    .metric-last  { font-size: 0.68rem; color: var(--border3); margin-top: 1px; }
+
+    /* ── About panel ──────────────────────────────────────────── */
+    .about-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding: 12px 16px;
+    }
+    .about-list li {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 0.78rem;
+      color: var(--text2);
+    }
+    .about-list .dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--accent);
+      flex-shrink: 0;
+      opacity: 0.6;
+    }
+
+    /* ── RIGHT COLUMN — conversation ─────────────────────────── */
+    .chat-col {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      min-height: 0;
+    }
+
+    .chat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .chat-topbar {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .chat-topbar-left { display: flex; align-items: center; gap: 10px; }
+    .chat-avatar {
+      width: 36px; height: 36px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--accent) 0%, var(--accent2) 100%);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px;
+      box-shadow: 0 0 14px var(--accent-glow);
+    }
+    .chat-name   { font-size: 0.88rem; font-weight: 600; }
+    .chat-desc   { font-size: 0.72rem; color: var(--muted); margin-top: 1px; }
+    .chat-topbar-right { display: flex; gap: 6px; }
+    .icon-btn {
+      width: 32px; height: 32px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border2);
+      background: var(--surface2);
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer;
+      color: var(--muted);
+      transition: all 0.2s;
+    }
+    .icon-btn:hover { border-color: var(--border3); color: var(--text2); background: var(--surface3); }
+
+    /* ── Messages ─────────────────────────────────────────────── */
+    #transcript {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px 20px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      min-height: 500px;
+      max-height: calc(100vh - 260px);
+      scroll-behavior: smooth;
+    }
+    #transcript::-webkit-scrollbar { width: 4px; }
+    #transcript::-webkit-scrollbar-track { background: transparent; }
+    #transcript::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 4px; }
+
+    /* Empty state */
+    .empty-state {
+      flex: 1;
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      min-height: 100vh;
-      gap: 32px;
+      gap: 14px;
+      color: var(--muted);
+      opacity: 0.45;
+      font-size: 0.85rem;
+      text-align: center;
+      padding: 40px;
+      min-height: 300px;
     }
+    .empty-state-icon {
+      width: 56px; height: 56px;
+      border-radius: 16px;
+      border: 1px solid var(--border2);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 26px;
+      background: var(--surface2);
+    }
+    .empty-state p { font-size: 0.82rem; line-height: 1.5; max-width: 220px; }
 
-    h1 { font-size: 1.4rem; font-weight: 500; color: #aaa; letter-spacing: 0.05em; }
+    /* Message rows */
+    .msg-row {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      animation: msg-in 0.28s cubic-bezier(0.34,1.56,0.64,1) both;
+    }
+    @keyframes msg-in {
+      from { opacity: 0; transform: translateY(10px) scale(0.97); }
+      to   { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    .msg-row.user  { align-items: flex-end; }
+    .msg-row.agent { align-items: flex-start; }
 
-    #btn {
-      width: 120px;
-      height: 120px;
+    .msg-meta {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 0 4px;
+    }
+    .msg-avatar-sm {
+      width: 18px; height: 18px;
       border-radius: 50%;
-      border: 3px solid #333;
-      background: #1a1a1a;
-      color: #e0e0e0;
-      font-size: 0.85rem;
-      letter-spacing: 0.05em;
-      cursor: pointer;
-      transition: all 0.2s;
-      outline: none;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 10px;
+      flex-shrink: 0;
     }
-    #btn:hover { border-color: #555; background: #222; }
-    #btn.active {
-      border-color: #4caf50;
-      background: #1b2e1b;
-      box-shadow: 0 0 24px rgba(76,175,80,0.3);
+    .msg-row.user  .msg-avatar-sm { background: var(--accent-dim); border: 1px solid rgba(139,92,246,0.25); order: 2; }
+    .msg-row.agent .msg-avatar-sm { background: var(--surface3); border: 1px solid var(--border2); }
+    .msg-label {
+      font-size: 0.68rem;
+      color: var(--muted);
+      font-weight: 500;
+      letter-spacing: 0.03em;
     }
-    #btn.speaking {
-      border-color: #2196f3;
-      background: #0d1f2d;
-      box-shadow: 0 0 24px rgba(33,150,243,0.3);
-    }
-    #btn.connecting {
-      border-color: #ff9800;
-      background: #2a1e0d;
+    .msg-time {
+      font-size: 0.65rem;
+      color: var(--border3);
     }
 
-    #status {
-      font-size: 0.85rem;
-      color: #666;
-      height: 1.2em;
-      transition: color 0.2s;
+    .msg-bubble {
+      max-width: 75%;
+      padding: 11px 15px;
+      border-radius: 16px;
+      font-size: 0.875rem;
+      line-height: 1.6;
+      word-break: break-word;
+      position: relative;
+    }
+    .msg-row.user .msg-bubble {
+      background: linear-gradient(135deg, rgba(139,92,246,0.22) 0%, rgba(167,139,250,0.15) 100%);
+      border: 1px solid rgba(139,92,246,0.28);
+      color: #d4c7ff;
+      border-bottom-right-radius: 4px;
+    }
+    .msg-row.agent .msg-bubble {
+      background: var(--surface2);
+      border: 1px solid var(--border2);
+      color: var(--text);
+      border-bottom-left-radius: 4px;
     }
 
-    #transcript {
-      width: min(520px, 90vw);
-      max-height: 280px;
-      overflow-y: auto;
+    /* Typing indicator */
+    .typing-row {
       display: flex;
       flex-direction: column;
+      align-items: flex-start;
+      gap: 5px;
+      animation: msg-in 0.2s ease both;
+    }
+    .typing-bubble {
+      background: var(--surface2);
+      border: 1px solid var(--border2);
+      border-radius: 16px;
+      border-bottom-left-radius: 4px;
+      padding: 11px 18px;
+      display: flex;
+      gap: 5px;
+      align-items: center;
+    }
+    .typing-bubble span {
+      width: 7px; height: 7px;
+      background: var(--muted);
+      border-radius: 50%;
+      animation: t-bounce 1.3s ease infinite;
+    }
+    .typing-bubble span:nth-child(2) { animation-delay: 0.18s; }
+    .typing-bubble span:nth-child(3) { animation-delay: 0.36s; }
+    @keyframes t-bounce {
+      0%, 60%, 100% { transform: translateY(0); opacity: 0.35; }
+      30%           { transform: translateY(-5px); opacity: 1; }
+    }
+
+    /* ── Chat input bar (decorative — audio only) ────────────── */
+    .chat-footer {
+      padding: 14px 20px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      align-items: center;
       gap: 10px;
     }
-
-    .msg {
-      padding: 10px 14px;
-      border-radius: 12px;
-      font-size: 0.9rem;
-      line-height: 1.5;
-      max-width: 85%;
-    }
-    .msg.user {
-      background: #1e2a1e;
-      border: 1px solid #2a3d2a;
-      align-self: flex-end;
-      color: #90c990;
-    }
-    .msg.agent {
-      background: #1a1f2e;
-      border: 1px solid #252d42;
-      align-self: flex-start;
-      color: #90afd4;
-    }
-    .msg .label {
-      font-size: 0.7rem;
-      opacity: 0.5;
-      margin-bottom: 4px;
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-    }
-
-    #metrics {
-      width: min(520px, 90vw);
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 10px;
-    }
-
-    .metric-card {
-      background: #161616;
-      border: 1px solid #2a2a2a;
+    .chat-input-fake {
+      flex: 1;
+      height: 40px;
+      background: var(--bg2);
+      border: 1px solid var(--border2);
       border-radius: 10px;
-      padding: 12px 14px;
       display: flex;
-      flex-direction: column;
-      gap: 4px;
+      align-items: center;
+      padding: 0 14px;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 0.8rem;
+      user-select: none;
     }
-    .metric-card .metric-label {
-      font-size: 0.7rem;
-      color: #555;
-      text-transform: uppercase;
-      letter-spacing: 0.07em;
+    .chat-input-fake svg { opacity: 0.4; flex-shrink: 0; }
+    .chat-input-fake span { opacity: 0.5; }
+    .chat-send-btn {
+      width: 40px; height: 40px;
+      border-radius: 10px;
+      background: var(--accent-dim);
+      border: 1px solid rgba(139,92,246,0.25);
+      display: flex; align-items: center; justify-content: center;
+      color: var(--accent2);
+      cursor: default;
+      opacity: 0.5;
     }
-    .metric-card .metric-value {
-      font-size: 1.3rem;
-      font-weight: 600;
-      color: #c0c0c0;
-      font-variant-numeric: tabular-nums;
-    }
-    .metric-card .metric-value span {
-      font-size: 0.75rem;
-      font-weight: 400;
-      color: #555;
-    }
-    .metric-card .metric-last {
-      font-size: 0.72rem;
-      color: #444;
+
+    /* ── Responsive ──────────────────────────────────────────── */
+    @media (max-width: 760px) {
+      .columns { grid-template-columns: 1fr; }
+      .sidebar  { position: static; }
+      #transcript { max-height: 420px; min-height: 320px; }
+      .app { padding: 0 12px; }
     }
   </style>
 </head>
 <body>
+<div class="app">
 
-<h1>Phone Call Agent</h1>
+  <!-- ── Navigation ──────────────────────────────────── -->
+  <nav>
+    <div class="nav-logo">
+      <div class="nav-logo-mark">🎙</div>
+      <div>
+        <div class="nav-title">Phone Call Agent</div>
+        <div class="nav-tagline">Real-time AI voice conversation</div>
+      </div>
+    </div>
+    <div class="nav-right">
+      <div class="badge" id="connection-badge">
+        <div class="badge-dot"></div>
+        <span id="badge-text">Offline</span>
+      </div>
+    </div>
+  </nav>
 
-<button id="btn">START</button>
+  <!-- ── Two columns ──────────────────────────────────── -->
+  <div class="columns">
 
-<div id="status">Click to begin</div>
+    <!-- LEFT — controls + metrics -->
+    <aside class="sidebar">
 
-<div id="metrics">
-  <div class="metric-card">
-    <div class="metric-label">STT handoff</div>
-    <div class="metric-value" id="stt-avg">—<span> ms</span></div>
-    <div class="metric-last" id="stt-last"></div>
-  </div>
-  <div class="metric-card">
-    <div class="metric-label">LLM first token</div>
-    <div class="metric-value" id="llm-avg">—<span> ms</span></div>
-    <div class="metric-last" id="llm-last"></div>
-  </div>
-  <div class="metric-card">
-    <div class="metric-label">TTS first audio</div>
-    <div class="metric-value" id="tts-avg">—<span> ms</span></div>
-    <div class="metric-last" id="tts-last"></div>
-  </div>
-</div>
+      <!-- Call control -->
+      <div class="panel call-panel">
+        <div class="panel-header">
+          <div class="panel-icon">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.61 3.35 2 2 0 0 1 3.6 1.18h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.82a16 16 0 0 0 6.29 6.29l.96-.96a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/>
+            </svg>
+          </div>
+          <span class="panel-title">Call Control</span>
+        </div>
+        <div class="panel-body">
+          <!-- Waveform -->
+          <div class="wave-container" id="wave">
+            <div class="wave-bar"></div><div class="wave-bar"></div><div class="wave-bar"></div>
+            <div class="wave-bar"></div><div class="wave-bar"></div><div class="wave-bar"></div>
+            <div class="wave-bar"></div><div class="wave-bar"></div><div class="wave-bar"></div>
+            <div class="wave-bar"></div><div class="wave-bar"></div><div class="wave-bar"></div>
+          </div>
 
-<div id="transcript"></div>
+          <!-- Big round button -->
+          <div class="btn-ring" id="btn-ring">
+            <button id="btn" aria-label="Start call">
+              <svg id="icon-mic" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                <line x1="12" y1="19" x2="12" y2="23"/>
+                <line x1="8" y1="23" x2="16" y2="23"/>
+              </svg>
+              <svg id="icon-stop" width="20" height="20" viewBox="0 0 24 24" fill="white" style="display:none">
+                <rect x="4" y="4" width="16" height="16" rx="3"/>
+              </svg>
+            </button>
+          </div>
+
+          <!-- Status text -->
+          <div class="call-status-block">
+            <div id="status-line">Ready to call</div>
+            <div id="status-sub">Press the button to begin</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Latency metrics -->
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-icon">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+            </svg>
+          </div>
+          <span class="panel-title">Pipeline Latency</span>
+        </div>
+        <div class="metrics-grid">
+          <div class="metric-item">
+            <div class="metric-icon stt">🎧</div>
+            <div class="metric-info">
+              <div class="metric-label">STT Handoff</div>
+              <div class="metric-val" id="stt-avg">—<span> ms</span></div>
+              <div class="metric-last" id="stt-last">no data yet</div>
+            </div>
+          </div>
+          <div class="metric-item">
+            <div class="metric-icon llm">🧠</div>
+            <div class="metric-info">
+              <div class="metric-label">LLM First Token</div>
+              <div class="metric-val" id="llm-avg">—<span> ms</span></div>
+              <div class="metric-last" id="llm-last">no data yet</div>
+            </div>
+          </div>
+          <div class="metric-item">
+            <div class="metric-icon tts">🔊</div>
+            <div class="metric-info">
+              <div class="metric-label">TTS First Audio</div>
+              <div class="metric-val" id="tts-avg">—<span> ms</span></div>
+              <div class="metric-last" id="tts-last">no data yet</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Pipeline info -->
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-icon">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>
+          </div>
+          <span class="panel-title">Pipeline</span>
+        </div>
+        <ul class="about-list">
+          <li><div class="dot"></div> Deepgram — streaming STT</li>
+          <li><div class="dot"></div> GPT-4o — LLM response</li>
+          <li><div class="dot"></div> ElevenLabs — neural TTS</li>
+          <li><div class="dot"></div> μ-law G.711 audio codec</li>
+          <li><div class="dot"></div> WebRTC echo cancellation</li>
+        </ul>
+      </div>
+
+    </aside>
+
+    <!-- RIGHT — conversation -->
+    <div class="chat-col">
+      <div class="chat-card">
+
+        <!-- Chat topbar -->
+        <div class="chat-topbar">
+          <div class="chat-topbar-left">
+            <div class="chat-avatar">🤖</div>
+            <div>
+              <div class="chat-name">AI Assistant</div>
+              <div class="chat-desc">Powered by GPT-4o · ElevenLabs voice</div>
+            </div>
+          </div>
+          <div class="chat-topbar-right">
+            <div class="icon-btn" title="Clear transcript" id="clear-btn">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/>
+              </svg>
+            </div>
+          </div>
+        </div>
+
+        <!-- Messages -->
+        <div id="transcript">
+          <div class="empty-state" id="empty-state">
+            <div class="empty-state-icon">💬</div>
+            <p>Start a call to see the conversation transcript here in real time</p>
+          </div>
+        </div>
+
+        <!-- Footer bar -->
+        <div class="chat-footer">
+          <div class="chat-input-fake">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+            </svg>
+            <span>Voice input only — speak after connecting</span>
+          </div>
+          <div class="chat-send-btn">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+            </svg>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+  </div><!-- /columns -->
+</div><!-- /app -->
 
 <script>
 // ─── Playback tracking ────────────────────────────────────────────────────────
@@ -172,7 +781,7 @@ function onBlobFinished() {
 }
 
 // ─── Latency metrics ──────────────────────────────────────────────────────────
-const WINDOW = 5;  // rolling average over last N turns
+const WINDOW = 5;
 const history = { stt: [], llm: [], tts: [] };
 
 function updateMetrics({ stt_ms, llm_ms, tts_ms }) {
@@ -180,15 +789,11 @@ function updateMetrics({ stt_ms, llm_ms, tts_ms }) {
   push(history.stt, stt_ms);
   push(history.llm, llm_ms);
   push(history.tts, tts_ms);
-
   const avg = arr => Math.round(arr.reduce((a, b) => a + b, 0) / arr.length);
-
   const render = (avgEl, lastEl, arr) => {
-    const a = avg(arr);
-    avgEl.childNodes[0].textContent = a;
+    avgEl.childNodes[0].textContent = avg(arr);
     lastEl.textContent = `last: ${arr[arr.length - 1]} ms`;
   };
-
   render(document.getElementById("stt-avg"), document.getElementById("stt-last"), history.stt);
   render(document.getElementById("llm-avg"), document.getElementById("llm-last"), history.llm);
   render(document.getElementById("tts-avg"), document.getElementById("tts-last"), history.tts);
@@ -201,14 +806,22 @@ let mediaStream = null;
 let scriptProcessor = null;
 let agentSpeaking = false;
 let playbackQueue = Promise.resolve();
-let currentSource = null;   // currently playing AudioBufferSource
-let cleared = false;        // drop blobs that arrive just before a clear
+let currentSource = null;
+let cleared = false;
 
-const btn = document.getElementById("btn");
-const statusEl = document.getElementById("status");
+const btn      = document.getElementById("btn");
+const btnRing  = document.getElementById("btn-ring");
+const iconMic  = document.getElementById("icon-mic");
+const iconStop = document.getElementById("icon-stop");
+const statusLine = document.getElementById("status-line");
+const statusSub  = document.getElementById("status-sub");
+const badge    = document.getElementById("connection-badge");
+const badgeText = document.getElementById("badge-text");
+const wave     = document.getElementById("wave");
 const transcriptEl = document.getElementById("transcript");
+let emptyState = document.getElementById("empty-state");
 
-// ─── μ-law decode table (ITU-T G.711) ────────────────────────────────────────
+// ─── μ-law decode table ───────────────────────────────────────────────────────
 const ULAW_TABLE = (() => {
   const t = new Int16Array(256);
   for (let i = 0; i < 256; i++) {
@@ -224,29 +837,111 @@ const ULAW_TABLE = (() => {
 
 function mulawToFloat32(mulaw) {
   const out = new Float32Array(mulaw.length);
-  for (let i = 0; i < mulaw.length; i++) {
-    out[i] = ULAW_TABLE[mulaw[i]] / 32768.0;
-  }
+  for (let i = 0; i < mulaw.length; i++) out[i] = ULAW_TABLE[mulaw[i]] / 32768.0;
   return out;
 }
 
 // ─── UI helpers ───────────────────────────────────────────────────────────────
-function setStatus(text, cls = "") {
-  statusEl.textContent = text;
-  btn.className = cls;
+function setUIState(line, sub, cls) {
+  statusLine.textContent = line;
+  statusSub.textContent  = sub || "";
+  btn.className     = cls || "";
+  btnRing.className = "btn-ring" + (cls ? " " + cls : "");
+  wave.className    = "wave-container" + (cls ? " " + cls : "");
+  badge.className   = "badge" + (cls ? " " + cls : "");
+  badgeText.textContent = cls === "active"     ? "Listening"    :
+                          cls === "speaking"   ? "Speaking"     :
+                          cls === "connecting" ? "Connecting…"  : "Offline";
+  const running = cls === "active" || cls === "speaking" || cls === "connecting";
+  iconMic.style.display  = running ? "none" : "";
+  iconStop.style.display = running ? ""     : "none";
+}
+
+// ── Transcript helpers ────────────────────────────────────────────────────────
+let agentBubble = null;
+
+function removeEmptyState() {
+  if (emptyState) { emptyState.remove(); emptyState = null; }
+}
+
+function nowTime() {
+  return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
 function addMessage(role, text) {
-  const div = document.createElement("div");
-  div.className = `msg ${role}`;
-  div.innerHTML = `<div class="label">${role === "user" ? "You" : "Agent"}</div>${text}`;
-  transcriptEl.appendChild(div);
+  removeEmptyState();
+  const typing = transcriptEl.querySelector(".typing-row");
+  if (typing) typing.remove();
+
+  if (role === "agent" && agentBubble) {
+    agentBubble.textContent += " " + text;
+    transcriptEl.scrollTop = transcriptEl.scrollHeight;
+    return;
+  }
+
+  agentBubble = null;
+  const row = document.createElement("div");
+  row.className = `msg-row ${role}`;
+
+  const avatarChar = role === "user" ? "🧑" : "🤖";
+
+  const meta = document.createElement("div");
+  meta.className = "msg-meta";
+  meta.innerHTML = `
+    <div class="msg-avatar-sm">${avatarChar}</div>
+    <span class="msg-label">${role === "user" ? "You" : "Agent"}</span>
+    <span class="msg-time">${nowTime()}</span>
+  `;
+
+  const bubble = document.createElement("div");
+  bubble.className = "msg-bubble";
+  bubble.textContent = text;
+
+  row.appendChild(meta);
+  row.appendChild(bubble);
+  transcriptEl.appendChild(row);
+
+  if (role === "agent") agentBubble = bubble;
   transcriptEl.scrollTop = transcriptEl.scrollHeight;
 }
 
+function showTyping() {
+  removeEmptyState();
+  if (transcriptEl.querySelector(".typing-row")) return;
+  const row = document.createElement("div");
+  row.className = "typing-row";
+  row.innerHTML = `
+    <div class="msg-meta">
+      <div class="msg-avatar-sm">🤖</div>
+      <span class="msg-label">Agent</span>
+    </div>
+    <div class="typing-bubble"><span></span><span></span><span></span></div>
+  `;
+  transcriptEl.appendChild(row);
+  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+}
+
+function clearAgentBubble() {
+  agentBubble = null;
+}
+
+// Clear transcript button
+document.getElementById("clear-btn").addEventListener("click", () => {
+  transcriptEl.innerHTML = '';
+  emptyState = document.createElement("div");
+  emptyState.className = "empty-state";
+  emptyState.id = "empty-state";
+  emptyState.innerHTML = `
+    <div class="empty-state-icon">💬</div>
+    <p>Transcript cleared. Continue speaking to add new messages.</p>
+  `;
+  transcriptEl.appendChild(emptyState);
+  clearAgentBubble();
+});
+
 // ─── Audio playback ───────────────────────────────────────────────────────────
 function schedulePlayback(mulaw) {
-  if (cleared) return;  // drop blobs that arrived just before or with a clear
+  if (cleared) return;
   pendingBlobs++;
   playbackQueue = playbackQueue.then(() => playBlob(mulaw)).then(onBlobFinished);
 }
@@ -261,28 +956,25 @@ function stopCurrentSource() {
 function playBlob(mulaw) {
   return new Promise(resolve => {
     if (!audioCtx || cleared) { resolve(); return; }
-
     const samples = mulawToFloat32(mulaw);
     const buffer  = audioCtx.createBuffer(1, samples.length, 8000);
     buffer.getChannelData(0).set(samples);
-
     const src = audioCtx.createBufferSource();
     src.buffer = buffer;
     src.connect(audioCtx.destination);
     src.onended = () => { currentSource = null; resolve(); };
     currentSource = src;
     src.start();
-
     agentSpeaking = true;
-    setStatus("Agent speaking…", "speaking");
+    setUIState("Agent speaking…", "Audio playing back", "speaking");
   }).then(() => {
-    if (cleared) return;  // skip tail silence if we were cleared
+    if (cleared) return;
     return new Promise(r => setTimeout(r, 200));
   }).then(() => {
     if (!cleared) {
       agentSpeaking = false;
       if (ws && ws.readyState === WebSocket.OPEN) {
-        setStatus("Listening…", "active");
+        setUIState("Listening…", "Speak when ready", "active");
       }
     }
   });
@@ -290,21 +982,12 @@ function playBlob(mulaw) {
 
 // ─── Mic capture ──────────────────────────────────────────────────────────────
 function startMic() {
-  // ScriptProcessor captures PCM at the AudioContext sample rate (usually 44100
-  // or 48000). We need 16000 Hz for Deepgram, so we downsample manually.
-  // Simple approach: capture at 16000 Hz by creating AudioContext at that rate.
   audioCtx = new AudioContext({ sampleRate: 16000 });
-
   const source = audioCtx.createMediaStreamSource(mediaStream);
-
-  // 1024-sample buffer ≈ 64 ms @ 16 kHz — low latency for fast interruption
   scriptProcessor = audioCtx.createScriptProcessor(1024, 1, 1);
-
   scriptProcessor.onaudioprocess = (e) => {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
-
     const float32 = e.inputBuffer.getChannelData(0);
-    // Convert Float32 → Int16 PCM
     const pcm16 = new Int16Array(float32.length);
     for (let i = 0; i < float32.length; i++) {
       const s = Math.max(-1, Math.min(1, float32[i]));
@@ -312,9 +995,8 @@ function startMic() {
     }
     ws.send(pcm16.buffer);
   };
-
   source.connect(scriptProcessor);
-  scriptProcessor.connect(audioCtx.destination); // required to fire onaudioprocess
+  scriptProcessor.connect(audioCtx.destination);
 }
 
 function stopMic() {
@@ -330,7 +1012,7 @@ function connect() {
   ws.binaryType = "arraybuffer";
 
   ws.onopen = () => {
-    setStatus("Connected — speak now", "active");
+    setUIState("Connected — speak now", "Listening for your voice", "active");
     startMic();
   };
 
@@ -339,34 +1021,42 @@ function connect() {
       if (e.data === "clear") {
         cleared = true;
         pendingBlobs = 0;
-        stopCurrentSource();         // stop any currently playing audio immediately
+        stopCurrentSource();
         playbackQueue = Promise.resolve();
         agentSpeaking = false;
-        setStatus("Listening…", "active");
-        // Allow new blobs from the next response to queue normally
+        clearAgentBubble();
+        setUIState("Listening…", "Speak when ready", "active");
         setTimeout(() => { cleared = false; }, 300);
       } else {
         try {
           const msg = JSON.parse(e.data);
-          if (msg.type === "metrics") updateMetrics(msg);
+          if (msg.type === "metrics") {
+            updateMetrics(msg);
+          } else if (msg.type === "transcript") {
+            if (msg.role === "user") {
+              clearAgentBubble();
+              addMessage("user", msg.text);
+              showTyping();
+            } else if (msg.role === "agent") {
+              addMessage("agent", msg.text);
+            }
+          }
         } catch (_) {}
       }
       return;
     }
-    // Binary: μ-law audio blob
     schedulePlayback(new Uint8Array(e.data));
   };
 
   ws.onclose = () => {
     stopMic();
     agentSpeaking = false;
-    setStatus("Disconnected — click to reconnect");
-    btn.className = "";
-    btn.textContent = "START";
+    clearAgentBubble();
+    setUIState("Disconnected", "Click to reconnect");
   };
 
   ws.onerror = () => {
-    setStatus("Connection error");
+    setUIState("Connection error", "Check server status");
   };
 }
 
@@ -375,19 +1065,18 @@ function disconnect() {
   stopMic();
   agentSpeaking = false;
   playbackQueue = Promise.resolve();
+  clearAgentBubble();
 }
 
 // ─── Button ───────────────────────────────────────────────────────────────────
 btn.addEventListener("click", async () => {
   if (ws && ws.readyState === WebSocket.OPEN) {
     disconnect();
-    btn.textContent = "START";
-    setStatus("Click to begin");
+    setUIState("Ready to call", "Press the button to begin");
     return;
   }
 
-  setStatus("Requesting microphone…", "connecting");
-  btn.textContent = "…";
+  setUIState("Requesting mic…", "Waiting for permission", "connecting");
 
   try {
     mediaStream = await navigator.mediaDevices.getUserMedia({
@@ -400,14 +1089,11 @@ btn.addEventListener("click", async () => {
       }
     });
   } catch (err) {
-    setStatus("Microphone access denied");
-    btn.textContent = "START";
-    btn.className = "";
+    setUIState("Microphone denied", "Allow mic access and try again");
     return;
   }
 
-  btn.textContent = "END";
-  setStatus("Connecting…", "connecting");
+  setUIState("Connecting…", "Establishing connection", "connecting");
   connect();
 });
 </script>

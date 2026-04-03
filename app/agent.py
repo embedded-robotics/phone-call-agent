@@ -47,7 +47,7 @@ def _split_at_boundary(buffer: str) -> tuple[str, str]:
 
 
 class ConversationSession:
-    def __init__(self, send_audio, send_clear, send_metrics=None) -> None:
+    def __init__(self, send_audio, send_clear, send_metrics=None, send_transcript=None) -> None:
         """
         Parameters
         ----------
@@ -57,10 +57,13 @@ class ConversationSession:
             Signals the client to discard buffered audio on interruption.
         send_metrics : async callable(metrics: dict) -> None, optional
             Receives per-turn latency metrics: stt_ms, llm_ms, tts_ms.
+        send_transcript : async callable(role: str, text: str) -> None, optional
+            Receives transcript events: role is "user" or "agent", text is the utterance.
         """
         self._send_audio = send_audio
         self._send_clear = send_clear
         self._send_metrics = send_metrics
+        self._send_transcript = send_transcript
 
         self._llm = OpenAIAgent(
             api_key=settings.openai_api_key,
@@ -130,6 +133,8 @@ class ConversationSession:
         self._transcript_buffer.clear()
         if user_text:
             self._utterance_end_time = time.monotonic()
+            if self._send_transcript:
+                asyncio.create_task(self._send_transcript("user", user_text))
             asyncio.create_task(self._respond(user_text))
 
     # ------------------------------------------------------------------ #
@@ -228,6 +233,8 @@ class ConversationSession:
                 await audio_queue.put(_SENTINEL)
                 break
             logger.info("Synthesizing: %s", sentence)
+            if self._send_transcript:
+                asyncio.create_task(self._send_transcript("agent", sentence))
             t0 = time.monotonic()
             audio = await self._tts.synthesize(sentence)
             if first:

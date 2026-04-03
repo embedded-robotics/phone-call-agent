@@ -124,7 +124,15 @@ async def browser_ws(websocket: WebSocket) -> None:
     async def send_metrics(metrics: dict) -> None:
         await websocket.send_text(json.dumps({"type": "metrics", **metrics}))
 
-    session = ConversationSession(send_audio=send_audio, send_clear=send_clear, send_metrics=send_metrics)
+    async def send_transcript(role: str, text: str) -> None:
+        await websocket.send_text(json.dumps({"type": "transcript", "role": role, "text": text}))
+
+    session = ConversationSession(
+        send_audio=send_audio,
+        send_clear=send_clear,
+        send_metrics=send_metrics,
+        send_transcript=send_transcript,
+    )
     await session.start()
 
     try:
