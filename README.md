@@ -83,6 +83,7 @@ ngrok http 8000
 ```
 
 Set your Twilio number's Voice webhook:
+
 - **URL:** `https://<ngrok-url>/incoming-call`
 - **Method:** HTTP POST
 
@@ -130,36 +131,36 @@ Interruption: if the user speaks while the agent is talking, the pipeline task i
 
 ### Audio formats
 
-| Stage | Format |
-|---|---|
-| Browser mic | PCM 16-bit 16kHz (WebRTC) |
-| Server → Deepgram | μ-law 8kHz (downsampled in `main.py`) |
-| ElevenLabs output | μ-law 8kHz natively (`?output_format=ulaw_8000`) |
-| Server → browser | μ-law binary WebSocket frames (browser decodes with G.711 table) |
-| Server → Twilio | μ-law 8kHz, 160-byte chunks, base64 JSON, paced at 20ms intervals |
+| Stage              | Format                                                             |
+| ------------------ | ------------------------------------------------------------------ |
+| Browser mic        | PCM 16-bit 16kHz (WebRTC)                                          |
+| Server → Deepgram | μ-law 8kHz (downsampled in`main.py`)                            |
+| ElevenLabs output  | μ-law 8kHz natively (`?output_format=ulaw_8000`)                |
+| Server → browser  | μ-law binary WebSocket frames (browser decodes with G.711 table)  |
+| Server → Twilio   | μ-law 8kHz, 160-byte chunks, base64 JSON, paced at 20ms intervals |
 
 ### Latency budget
 
-| Component | Typical |
-|---|---|
-| Deepgram STT | ~300ms |
-| GPT-4o first sentence | ~300ms |
-| ElevenLabs TTS | ~300ms |
+| Component                      | Typical          |
+| ------------------------------ | ---------------- |
+| Deepgram STT                   | ~300ms           |
+| GPT-4o first sentence          | ~300ms           |
+| ElevenLabs TTS                 | ~300ms           |
 | **Total to first audio** | **~900ms** |
 
 ---
 
 ## Configuration reference
 
-| Variable | Default | Description |
-|---|---|---|
-| `DEEPGRAM_API_KEY` | — | Deepgram API key |
-| `OPENAI_API_KEY` | — | OpenAI API key |
-| `OPENAI_MODEL` | `gpt-4o` | OpenAI model ID |
-| `ELEVENLABS_API_KEY` | — | ElevenLabs API key |
-| `ELEVENLABS_VOICE_ID` | — | Voice ID from ElevenLabs dashboard |
-| `TWILIO_ACCOUNT_SID` | — | Twilio account SID (Twilio calls only) |
-| `TWILIO_AUTH_TOKEN` | — | Twilio auth token (Twilio calls only) |
-| `SYSTEM_PROMPT` | (see .env.example) | Agent persona and instructions |
-| `HOST` | `0.0.0.0` | Server bind address |
-| `PORT` | `8000` | Server port |
+| Variable                | Default            | Description                            |
+| ----------------------- | ------------------ | -------------------------------------- |
+| `DEEPGRAM_API_KEY`    | —                 | Deepgram API key                       |
+| `OPENAI_API_KEY`      | —                 | OpenAI API key                         |
+| `OPENAI_MODEL`        | `gpt-4o`         | OpenAI model ID                        |
+| `ELEVENLABS_API_KEY`  | —                 | ElevenLabs API key                     |
+| `ELEVENLABS_VOICE_ID` | —                 | Voice ID from ElevenLabs dashboard     |
+| `TWILIO_ACCOUNT_SID`  | —                 | Twilio account SID (Twilio calls only) |
+| `TWILIO_AUTH_TOKEN`   | —                 | Twilio auth token (Twilio calls only)  |
+| `SYSTEM_PROMPT`       | (see .env.example) | Agent persona and instructions         |
+| `HOST`                | `0.0.0.0`        | Server bind address                    |
+| `PORT`                | `8000`           | Server port                            |
